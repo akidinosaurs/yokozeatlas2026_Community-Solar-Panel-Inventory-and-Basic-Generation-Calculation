@@ -1,0 +1,1 @@
+# yokozeatlas2026_Community-Solar-Panel-Inventory-and-Basic-Generation-Calculation
