@@ -23,7 +23,7 @@
       inset: 0;
       overflow: hidden;
       pointer-events: none;
-      z-index: 0;
+      z-index: 1;
     }
     .oam-tile-pane img {
       position: absolute;
@@ -142,17 +142,23 @@
       <div class="absolute top-3 right-3 z-20 bg-white/95 backdrop-blur border border-slate-300 p-3 rounded-lg shadow-lg text-xs space-y-2 w-64">
         <div class="font-bold text-slate-800 border-b pb-1">🗺️ 背景地図を選択</div>
         <div class="space-y-1.5 text-[11px]">
-          <label class="flex items-center gap-1.5 cursor-pointer font-semibold text-blue-700">
-            <input type="radio" name="bm" value="oam" checked> 🛸 OpenAerialMap (空撮画像)
-          </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
-            <input type="radio" name="bm" value="esri"> 🛰️ Esri World Imagery (広域衛星)
+            <input type="radio" name="bm" value="esri" checked> 🛰️ Esri World Imagery (広域衛星)
           </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
             <input type="radio" name="bm" value="gsi_hillshade"> 🏔️ 国土地理院 陰影起伏図 (地形)
           </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
             <input type="radio" name="bm" value="carto"> 🗺️ CARTO Positron (標準図)
+          </label>
+        </div>
+        <div class="border-t pt-2 space-y-1.5 text-[11px]">
+          <label class="flex items-center gap-1.5 cursor-pointer font-semibold text-blue-700">
+            <input id="oam-overlay-toggle" type="checkbox" checked> 🛸 OAM空撮を重ねる
+          </label>
+          <label class="block text-gray-600">
+            OAM透明度
+            <input id="oam-opacity" type="range" min="0" max="100" value="65" class="w-full accent-blue-600">
           </label>
         </div>
       </div>
@@ -182,10 +188,8 @@
   </div>
 
   <script>
-    const EMPTY_STYLE = { version: 8, sources: {}, layers: [] };
     const OAM_TILE_TEMPLATE = 'https://tiles.openaerialmap.org/62aeecdea896280006b0a6d6/0/62aeecdea896280006b0a6d7/{z}/{x}/{y}';
     const BASEMAPS = {
-      oam: { style: EMPTY_STYLE },
       esri: {
         style: {
           version: 8,
@@ -211,7 +215,7 @@
 
     const map = new maplibregl.Map({
       container: 'map',
-      style: BASEMAPS.oam.style,
+      style: BASEMAPS.esri.style,
       center: [139.0828, 35.9847],
       zoom: 14,
       doubleClickZoom: false
@@ -222,12 +226,14 @@
     const oamTilePane = document.createElement('div');
     oamTilePane.className = 'oam-tile-pane';
     map.getContainer().insertBefore(oamTilePane, map.getCanvasContainer());
+    map.getCanvasContainer().style.zIndex = '0';
 
     let allFeatures = [];
     let currentFilteredFeatures = [];
     let activeMode = 'single';
     let popup = null;
-    let activeBasemap = 'oam';
+    let activeBasemap = 'esri';
+    let oamOverlayEnabled = true;
     let oamFrame = null;
 
     let drawPoints = [];
@@ -241,6 +247,14 @@
 
     document.getElementById('mode-single').addEventListener('click', () => setSelectionMode('single'));
     document.getElementById('mode-box').addEventListener('click', () => setSelectionMode('box'));
+    document.getElementById('oam-overlay-toggle').addEventListener('change', (e) => {
+      oamOverlayEnabled = e.target.checked;
+      oamTilePane.style.display = oamOverlayEnabled ? 'block' : 'none';
+      if (oamOverlayEnabled) renderOamTiles();
+    });
+    document.getElementById('oam-opacity').addEventListener('input', (e) => {
+      oamTilePane.style.opacity = String(Number(e.target.value) / 100);
+    });
 
     // ベースマップ切り替え
     document.querySelectorAll('input[name="bm"]').forEach(radio => {
@@ -251,8 +265,10 @@
 
     map.on('load', () => {
       setBasemap(activeBasemap);
+      oamTilePane.style.opacity = '0.65';
       renderGeoJSONOnMap();
       renderDrawLayer();
+      renderOamTiles();
     });
     map.on('move', scheduleOamTiles);
     map.on('zoom', scheduleOamTiles);
@@ -260,32 +276,23 @@
 
     function setBasemap(key) {
       activeBasemap = key;
-      oamTilePane.style.display = key === 'oam' ? 'block' : 'none';
-      if (key === 'oam') {
-        map.setStyle(EMPTY_STYLE);
-        map.once('styledata', () => {
-          renderGeoJSONOnMap();
-          renderDrawLayer();
-          renderOamTiles();
-        });
-      } else {
-        map.setStyle(BASEMAPS[key].style);
-        map.once('styledata', () => { 
-          renderGeoJSONOnMap(); 
-          renderDrawLayer(); 
-        });
-      }
+      map.setStyle(BASEMAPS[key].style);
+      map.once('styledata', () => { 
+        renderGeoJSONOnMap(); 
+        renderDrawLayer(); 
+        scheduleOamTiles();
+      });
     }
 
     function scheduleOamTiles() {
-      if (activeBasemap !== 'oam') return;
+      if (!oamOverlayEnabled) return;
       if (oamFrame) cancelAnimationFrame(oamFrame);
       oamFrame = requestAnimationFrame(renderOamTiles);
     }
 
     function renderOamTiles() {
       oamFrame = null;
-      if (activeBasemap !== 'oam') return;
+      if (!oamOverlayEnabled) return;
 
       const bounds = map.getBounds();
       const zoom = Math.max(0, Math.min(21, Math.floor(map.getZoom())));
