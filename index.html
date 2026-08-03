@@ -27,7 +27,7 @@
     <h1 class="text-lg font-bold flex items-center gap-2">
       <span>☀️</span> ソーラーパネル解析・可視化Webツール
     </h1>
-    <span class="text-xs text-gray-400">埼玉県横瀬町周辺 / OAM高解像度空撮 & QGIS多角形選択</span>
+    <span class="text-xs text-gray-400">埼玉県横瀬町周辺 / 衛星画像・地形図 & QGIS多角形選択</span>
   </header>
 
   <!-- メインコンテンツ領域 -->
@@ -115,7 +115,7 @@
       </div>
 
       <footer class="p-2.5 bg-slate-100 text-[10px] text-gray-500 border-t">
-        Map data © OpenStreetMap contributors | Tiles © OpenAerialMap, Esri, 国土地理院
+        Map data © OpenStreetMap contributors | Tiles © Esri, 国土地理院, CARTO
       </footer>
     </aside>
 
@@ -127,11 +127,8 @@
       <div class="absolute top-3 right-3 z-20 bg-white/95 backdrop-blur border border-slate-300 p-3 rounded-lg shadow-lg text-xs space-y-2 w-64">
         <div class="font-bold text-slate-800 border-b pb-1">🗺️ 背景地図を選択</div>
         <div class="space-y-1.5 text-[11px]">
-          <label class="flex items-center gap-1.5 cursor-pointer font-semibold text-blue-700">
-            <input type="radio" name="bm" value="oam" checked> 🛸 OpenAerialMap (空撮画像)
-          </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
-            <input type="radio" name="bm" value="esri"> 🛰️ Esri World Imagery (広域衛星)
+            <input type="radio" name="bm" value="esri" checked> 🛰️ Esri World Imagery (広域衛星)
           </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
             <input type="radio" name="bm" value="gsi_hillshade"> 🏔️ 国土地理院 陰影起伏図 (地形)
@@ -168,22 +165,6 @@
 
   <script>
     const BASEMAPS = {
-      // CORS対応プロパティ (crossOrigin) を設定した OpenAerialMap ソース
-      oam: {
-        style: {
-          version: 8,
-          sources: { 
-            'oam-tile': { 
-              type: 'raster', 
-              tiles: ['https://tiles.openaerialmap.org/62aeecdea896280006b0a6d6/0/62aeecdea896280006b0a6d7/{z}/{x}/{y}'], 
-              tileSize: 256,
-              crossOrigin: 'anonymous', // CORS回避のための重要な設定
-              attribution: '© <a href="https://openaerialmap.org" target="_blank">OpenAerialMap</a>' 
-            } 
-          },
-          layers: [{ id: 'oam-layer', type: 'raster', source: 'oam-tile', maxzoom: 21 }]
-        }
-      },
       esri: {
         style: {
           version: 8,
@@ -207,20 +188,12 @@
       }
     };
 
-    // リクエストのプロキシ・CORS制御用インスタンス化
     const map = new maplibregl.Map({
       container: 'map',
-      style: BASEMAPS.oam.style,
+      style: BASEMAPS.esri.style,
       center: [139.0828, 35.9847],
       zoom: 14,
-      doubleClickZoom: false,
-      // 必要に応じて資格情報を含めないリクエストとして処理
-      transformRequest: (url, resourceType) => {
-        if (resourceType === 'Tile' && url.includes('openaerialmap.org')) {
-          return { url, credentials: 'omit' };
-        }
-        return { url };
-      }
+      doubleClickZoom: false
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
