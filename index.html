@@ -136,17 +136,16 @@
   const OVERPASS_QUERY = `[out:json][timeout:25];
 area["name"="横瀬町"]["admin_level"="8"]->.searchArea;
 (
-  way(area.searchArea)["generator:source"="solar"];
-  way(area.searchArea)["power"="generator"]["generator:output:electricity"="solar"];
+  nwr(area.searchArea)["generator:source"="solar"];
+  nwr(area.searchArea)["power"="generator"]["generator:source"="solar"];
+  nwr(area.searchArea)["power"="generator"]["generator:method"="photovoltaic"];
+  nwr(area.searchArea)["power"="plant"]["plant:source"="solar"];
+  nwr(area.searchArea)["power"="plant"]["plant:method"="photovoltaic"];
   way(area.searchArea)["building"="solar_panels"];
   way(area.searchArea)["landuse"="solar_panel"];
-  relation(area.searchArea)["generator:source"="solar"];
-  way(area.searchArea)["generator:method"="photovoltaic"];
-  relation(area.searchArea)["generator:method"="photovoltaic"];
-  way(area.searchArea)["plant:source"="solar"];
-  relation(area.searchArea)["plant:source"="solar"];
-  way(area.searchArea)["plant:method"="photovoltaic"];
-  relation(area.searchArea)["plant:method"="photovoltaic"];
+  nwr(area.searchArea)["generator:method"="photovoltaic"];
+  nwr(area.searchArea)["plant:source"="solar"];
+  nwr(area.searchArea)["plant:method"="photovoltaic"];
 );
 out body geom;`;
 
@@ -155,10 +154,15 @@ out body geom;`;
     setLoading(true); showNotice('Overpass APIへ問い合わせています…'); setBadge('取得中','bg-amber-100 text-amber-700');
     try {
       const json = await requestOverpass();
-      const features = convertOverpass(json.elements || []);
+      const elements = json.elements || [];
+      const features = convertOverpass(elements);
       if (!features.length) {
         solarData = {type:'FeatureCollection',features:[]}; refreshLayer(); updateDashboard(); renderTable();
-        showNotice('横瀬町内で条件に合う閉じたソーラーパネル形状は見つかりませんでした。OSMの登録状況をご確認ください。','error'); setBadge('0件','bg-amber-100 text-amber-700'); return;
+        const pointOnlyCount = countPointOnlySolar(elements);
+        const message = pointOnlyCount
+          ? '横瀬町内で太陽光設備の点登録を' + pointOnlyCount + '件検出しましたが、面積計算に必要な面ポリゴンは見つかりませんでした。OSMでは面として登録されているかご確認ください。'
+          : '横瀬町内で条件に合う太陽光設備の面ポリゴンは見つかりませんでした。OSMの登録状況をご確認ください。';
+        showNotice(message,'error'); setBadge('0件','bg-amber-100 text-amber-700'); return;
       }
       solarData = {type:'FeatureCollection', features};
       refreshLayer(); updateDashboard(); renderTable(); fitData();
@@ -245,6 +249,18 @@ out body geom;`;
       }
     }
     return result;
+  }
+  function countPointOnlySolar(elements) {
+    return elements.filter(element => {
+      if (element.type !== 'node') return false;
+      const tags = element.tags || {};
+      return tags['generator:source'] === 'solar'
+        || tags['generator:method'] === 'photovoltaic'
+        || tags['plant:source'] === 'solar'
+        || tags['plant:method'] === 'photovoltaic'
+        || (tags.power === 'generator' && (tags['generator:source'] === 'solar' || tags['generator:method'] === 'photovoltaic'))
+        || (tags.power === 'plant' && (tags['plant:source'] === 'solar' || tags['plant:method'] === 'photovoltaic'));
+    }).length;
   }
   function geometryRing(geometry) {
     if (!Array.isArray(geometry) || geometry.length<3) return null;
