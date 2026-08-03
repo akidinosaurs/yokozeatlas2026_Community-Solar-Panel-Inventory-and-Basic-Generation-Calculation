@@ -168,15 +168,16 @@
 
   <script>
     const BASEMAPS = {
-      // 指定された OpenAerialMap の空撮タイル
+      // CORS対応プロパティ (crossOrigin) を設定した OpenAerialMap ソース
       oam: {
         style: {
           version: 8,
           sources: { 
             'oam-tile': { 
               type: 'raster', 
-              tiles: ['https://tiles.openaerialmap.org/5d0001ba646468000608c52f/0/5d0001ba646468000608c530/{z}/{x}/{y}'], 
-              tileSize: 256, 
+              tiles: ['https://tiles.openaerialmap.org/62aeecdea896280006b0a6d6/0/62aeecdea896280006b0a6d7/{z}/{x}/{y}'], 
+              tileSize: 256,
+              crossOrigin: 'anonymous', // CORS回避のための重要な設定
               attribution: '© <a href="https://openaerialmap.org" target="_blank">OpenAerialMap</a>' 
             } 
           },
@@ -206,13 +207,20 @@
       }
     };
 
-    // 初期ベースマップを OpenAerialMap に設定
+    // リクエストのプロキシ・CORS制御用インスタンス化
     const map = new maplibregl.Map({
       container: 'map',
       style: BASEMAPS.oam.style,
       center: [139.0828, 35.9847],
       zoom: 14,
-      doubleClickZoom: false
+      doubleClickZoom: false,
+      // 必要に応じて資格情報を含めないリクエストとして処理
+      transformRequest: (url, resourceType) => {
+        if (resourceType === 'Tile' && url.includes('openaerialmap.org')) {
+          return { url, credentials: 'omit' };
+        }
+        return { url };
+      }
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
