@@ -297,6 +297,59 @@
         .replace(/'/g, '&#39;');
     }
 
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const success = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (!success) throw new Error('copy command failed');
+    }
+
+    async function copyCoordinateText(text) {
+      try {
+        await copyTextToClipboard(text);
+        showStatus(`📍 座標をコピーしました: ${text}`, 'bg-blue-100 text-blue-800');
+      } catch (err) {
+        showStatus('⚠️ 自動コピーに失敗しました。ポップアップ内の座標を選択してコピーしてください。', 'bg-amber-100 text-amber-800');
+      }
+    }
+
+    function showCoordinatePopup(lngLat) {
+      const lon = Number(lngLat.lng).toFixed(6);
+      const lat = Number(lngLat.lat).toFixed(6);
+      const lonLat = `${lon},${lat}`;
+      const latLon = `${lat},${lon}`;
+
+      if (popup) popup.remove();
+      popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true })
+        .setLngLat(lngLat)
+        .setHTML(`
+          <div class="text-xs p-1 space-y-2 min-w-[220px]">
+            <div class="font-bold text-blue-700">📍 右クリック地点の座標</div>
+            <div>
+              <div class="text-gray-500">経度,緯度 / GIS向け</div>
+              <code class="block bg-slate-100 rounded px-2 py-1 font-mono select-all">${escapeHtml(lonLat)}</code>
+            </div>
+            <div>
+              <div class="text-gray-500">緯度,経度</div>
+              <code class="block bg-slate-100 rounded px-2 py-1 font-mono select-all">${escapeHtml(latLon)}</code>
+            </div>
+            <button type="button" class="w-full bg-blue-600 hover:bg-blue-700 text-white rounded px-2 py-1 font-bold" onclick="copyCoordinateText('${lonLat}')">経度,緯度をコピー</button>
+          </div>
+        `)
+        .addTo(map);
+    }
+
     document.getElementById('btn-fetch').addEventListener('click', fetchDataAndAnalyze);
     document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
     document.getElementById('btn-export-geojson').addEventListener('click', exportGeoJSON);
@@ -428,7 +481,7 @@
       if (mode === 'single') {
         btnSingle.className = "bg-blue-600 text-white font-bold text-xs py-1.5 px-2 rounded transition shadow-sm";
         btnBox.className = "bg-white text-gray-700 border border-gray-300 font-bold text-xs py-1.5 px-2 rounded hover:bg-gray-100 transition";
-        desc.innerText = "パネルを直接クリックして個別に計算結果を表示します。";
+        desc.innerHTML = "パネルを直接クリックして個別に計算結果を表示します。<br>地図を<b>右クリック</b>すると座標をコピーできます。";
         mapCanvas.style.cursor = '';
       } else {
         btnBox.className = "bg-blue-600 text-white font-bold text-xs py-1.5 px-2 rounded transition shadow-sm";
@@ -451,8 +504,11 @@
     });
 
     map.on('contextmenu', (e) => {
-      if (activeMode !== 'box') return;
       e.preventDefault();
+      if (activeMode !== 'box') {
+        showCoordinatePopup(e.lngLat);
+        return;
+      }
       if (drawPoints.length >= 3) {
         finishPolygonSelection();
       }

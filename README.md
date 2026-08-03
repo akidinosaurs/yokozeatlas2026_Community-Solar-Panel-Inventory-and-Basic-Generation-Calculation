@@ -19,6 +19,7 @@ https://akidinosaurs.github.io/yokozeatlas2026_Community-Solar-Panel-Inventory-a
 - OpenAerialMap（OAM）空撮レイヤの重ね表示
 - OAMレイヤのON/OFFと透明度調整
 - CSV / GeoJSON エクスポート
+- 地図上の右クリック地点の座標表示・コピー
 
 ## 提出用データ
 
