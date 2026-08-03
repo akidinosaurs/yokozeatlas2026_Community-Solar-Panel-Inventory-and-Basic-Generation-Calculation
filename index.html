@@ -82,6 +82,7 @@
   let solarData = {type:'FeatureCollection', features:[]};
   let sortKey = 'id';
   let mapReady = false;
+  let adminBoundary = null;
 
   function rasterStyle(url, maxzoom, attribution) {
     return {version:8, sources:{raster:{type:'raster', tiles:[url], tileSize:256, maxzoom, attribution}}, layers:[{id:'basemap-raster', type:'raster', source:'raster'}]};
@@ -133,6 +134,10 @@
   map.on('mouseenter','solar-fill',()=>map.getCanvas().style.cursor='pointer');
   map.on('mouseleave','solar-fill',()=>map.getCanvas().style.cursor='');
 
+  const ADMIN_BOUNDARY_QUERY = `[out:json][timeout:25];
+relation["boundary"="administrative"]["name"="横瀬町"]["admin_level"="8"];
+out body geom;`;
+
   const OVERPASS_QUERY = `[out:json][timeout:25];
 area["name"="横瀬町"]["admin_level"="8"]->.searchArea;
 (
@@ -153,9 +158,14 @@ out body geom;`;
   async function fetchAndAnalyze() {
     setLoading(true); showNotice('Overpass APIへ問い合わせています…'); setBadge('取得中','bg-amber-100 text-amber-700');
     try {
-      const json = await requestOverpass();
+      const [boundaryJson, json] = await Promise.all([
+        requestOverpass(ADMIN_BOUNDARY_QUERY),
+        requestOverpass(OVERPASS_QUERY)
+      ]);
+      adminBoundary = convertAdminBoundary(boundaryJson.elements || []);
+      if (!adminBoundary) throw new Error('横瀬町の行政界ポリゴンを取得できませんでした');
       const elements = json.elements || [];
-      const features = convertOverpass(elements);
+      const features = filterByAdminBoundary(convertOverpass(elements), adminBoundary);
       if (!features.length) {
         solarData = {type:'FeatureCollection',features:[]}; refreshLayer(); updateDashboard(); renderTable();
         const pointOnlyCount = countPointOnlySolar(elements);
@@ -174,7 +184,7 @@ out body geom;`;
     } finally { setLoading(false); }
   }
 
-  async function requestOverpass() {
+  async function requestOverpass(query) {
     const endpoints=[
       'https://lz4.overpass-api.de/api/interpreter',
       'https://overpass-api.de/api/interpreter',
@@ -186,12 +196,12 @@ out body geom;`;
     for (let i=0;i<endpoints.length;i++) {
       if(i>0) showNotice('公開APIが混雑しているため、予備エンドポイントへ切り替えています…');
       try {
-        return await requestOverpassEndpoint(endpoints[i], 'POST');
+        return await requestOverpassEndpoint(endpoints[i], 'POST', query);
       } catch(error) {
         failures.push(shortEndpoint(endpoints[i]) + ' POST: ' + normalizeFetchError(error));
       }
       try {
-        return await requestOverpassEndpoint(endpoints[i], 'GET');
+        return await requestOverpassEndpoint(endpoints[i], 'GET', query);
       } catch(error) {
         failures.push(shortEndpoint(endpoints[i]) + ' GET: ' + normalizeFetchError(error));
       }
@@ -199,14 +209,14 @@ out body geom;`;
     throw new Error(failures.join(' / '));
   }
 
-  async function requestOverpassEndpoint(endpoint, method) {
+  async function requestOverpassEndpoint(endpoint, method, query) {
     const controller=new AbortController();
     const timer=setTimeout(()=>controller.abort(),45000);
     try {
       const options = method === 'POST'
-        ? {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(OVERPASS_QUERY),signal:controller.signal}
+        ? {method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded;charset=UTF-8'},body:'data='+encodeURIComponent(query),signal:controller.signal}
         : {method:'GET',signal:controller.signal};
-      const url = method === 'GET' ? endpoint + '?data=' + encodeURIComponent(OVERPASS_QUERY) : endpoint;
+      const url = method === 'GET' ? endpoint + '?data=' + encodeURIComponent(query) : endpoint;
       const response=await fetch(url, options);
       const text=await response.text();
       if(!response.ok) {
@@ -249,6 +259,44 @@ out body geom;`;
       }
     }
     return result;
+  }
+  function convertAdminBoundary(elements) {
+    const relation = elements.find(element => element.type === 'relation' && Array.isArray(element.members));
+    if (!relation) return null;
+    const polygons = relationToPolygons(relation);
+    if (!polygons.length) return null;
+    try {
+      return polygons.length === 1 ? turf.polygon(polygons[0]) : turf.multiPolygon(polygons);
+    } catch {
+      return null;
+    }
+  }
+  function relationToPolygons(relation) {
+    const outers = relation.members
+      .filter(member => member.type === 'way' && member.role !== 'inner' && Array.isArray(member.geometry))
+      .map(member => geometryRing(member.geometry))
+      .filter(Boolean);
+    const inners = relation.members
+      .filter(member => member.type === 'way' && member.role === 'inner' && Array.isArray(member.geometry))
+      .map(member => geometryRing(member.geometry))
+      .filter(Boolean);
+    return outers.map(outer => {
+      const holes = inners.filter(inner => {
+        try { return turf.booleanPointInPolygon(turf.point(inner[0]), turf.polygon([outer])); }
+        catch { return false; }
+      });
+      return [outer, ...holes];
+    });
+  }
+  function filterByAdminBoundary(features, boundaryFeature) {
+    if (!boundaryFeature) return [];
+    return features.filter(feature => {
+      try {
+        return turf.booleanIntersects(feature, boundaryFeature);
+      } catch {
+        return false;
+      }
+    });
   }
   function countPointOnlySolar(elements) {
     return elements.filter(element => {
