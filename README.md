@@ -19,6 +19,28 @@ https://akidinosaurs.github.io/yokozeatlas2026_Community-Solar-Panel-Inventory-a
 - OAMレイヤのON/OFFと透明度調整
 - CSV / GeoJSON エクスポート
 
+## 提出用データ
+
+提出用データは `data/` ディレクトリに格納しています。
+
+| 区分 | ファイル | 形式 | 内容 |
+| --- | --- | --- | --- |
+| メインデータ | `data/yokoze_solar_panels.geojson` | GeoJSON | 横瀬町行政界内の太陽光設備ポリゴン、OSMタグ、面積、推計容量、年間想定発電量 |
+| サブデータ1 | `data/yokoze_boundary.geojson` | GeoJSON | 横瀬町の行政界ポリゴン |
+| サブデータ2 | `data/yokoze_solar_panels.csv` | CSV | メインデータを表形式で確認・提出できる一覧 |
+| 参考補助 | `data/yokoze_solar_tag_summary.csv` | CSV | 検索条件に一致したOSMタグ別の件数集計 |
+
+生成条件:
+
+- 横瀬町行政界: OSM relation `1768252`
+- 太陽光設備候補タグ:
+  - `power=generator` + `generator:source=solar`
+  - `power=plant` + `plant:source=solar`
+  - `building=solar_panels`
+  - `landuse=solar_panel`
+- 行政界での絞り込み: 横瀬町行政界の bbox で候補を取得し、取得ポリゴンの重心が横瀬町行政界ポリゴン内にあるものを採用
+- データ生成スクリプト: `scripts/generate_submission_data.py`
+
 ## 参考データ・出典
 
 ### 空撮画像
