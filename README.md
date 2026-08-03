@@ -15,6 +15,7 @@ https://akidinosaurs.github.io/yokozeatlas2026_Community-Solar-Panel-Inventory-a
   - `building=solar_panels`
   - `landuse=solar_panel`
 - テーブル上で「検索条件に一致したタグ」と「OSMに登録されているタグ一覧」を表示
+- 面積・推計容量・年間想定発電量・ピーク出力ごとのランキング表示
 - OpenAerialMap（OAM）空撮レイヤの重ね表示
 - OAMレイヤのON/OFFと透明度調整
 - CSV / GeoJSON エクスポート

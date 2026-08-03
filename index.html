@@ -166,14 +166,25 @@
       </div>
 
       <div id="table-container" class="w-full bg-white border-t border-gray-300 flex flex-col overflow-hidden z-10" style="height: 35%;">
-        <div class="bg-slate-100 px-4 py-1.5 border-b flex justify-between items-center text-xs font-bold text-slate-700 flex-shrink-0">
-          <span>📋 抽出オブジェクト一覧</span>
-          <span id="table-status" class="text-gray-500 font-normal">全 0 件</span>
+        <div class="bg-slate-100 px-4 py-1.5 border-b flex flex-col gap-1.5 text-xs font-bold text-slate-700 flex-shrink-0">
+          <div class="flex justify-between items-center">
+            <span>📋 抽出オブジェクト一覧 / エリアランキング</span>
+            <span id="table-status" class="text-gray-500 font-normal">全 0 件</span>
+          </div>
+          <div class="flex flex-wrap gap-1.5 items-center text-[11px] font-normal">
+            <span id="ranking-status" class="font-semibold text-slate-600 mr-1">通常表示</span>
+            <button type="button" class="ranking-btn px-2 py-1 rounded bg-white border border-slate-300 hover:bg-blue-50" data-ranking-key="calc_area_m2">面積ランキング</button>
+            <button type="button" class="ranking-btn px-2 py-1 rounded bg-white border border-slate-300 hover:bg-blue-50" data-ranking-key="calc_annual_kwh">発電量ランキング</button>
+            <button type="button" class="ranking-btn px-2 py-1 rounded bg-white border border-slate-300 hover:bg-blue-50" data-ranking-key="calc_capacity_kw">容量ランキング</button>
+            <button type="button" class="ranking-btn px-2 py-1 rounded bg-white border border-slate-300 hover:bg-blue-50" data-ranking-key="calc_peak_kw">ピーク出力ランキング</button>
+            <button type="button" id="ranking-reset" class="px-2 py-1 rounded bg-slate-200 border border-slate-300 hover:bg-slate-300">通常表示に戻す</button>
+          </div>
         </div>
         <div class="flex-1 overflow-auto">
           <table id="data-table" class="w-full text-left text-xs border-collapse">
             <thead class="bg-slate-50 sticky top-0 border-b z-10">
               <tr>
+                <th class="p-2 border-r min-w-[56px]">順位</th>
                 <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(0)">ID ↕</th>
                 <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(1)">面積 (m²) ↕</th>
                 <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(2)">推計容量 (kW) ↕</th>
@@ -239,10 +250,19 @@
     let activeBasemap = 'esri';
     let oamOverlayEnabled = true;
     let oamFrame = null;
+    let activeRankingKey = null;
+    let sortAsc = false;
 
     let drawPoints = [];
     let currentMousePos = null;
     let selectedUserPolygon = null;
+
+    const RANKING_OPTIONS = {
+      calc_area_m2: { label: '面積ランキング', unit: 'm²' },
+      calc_annual_kwh: { label: '発電量ランキング', unit: 'kWh' },
+      calc_capacity_kw: { label: '容量ランキング', unit: 'kW' },
+      calc_peak_kw: { label: 'ピーク出力ランキング', unit: 'kW' }
+    };
 
     function getMatchingSolarQueryTags(tags = {}) {
       const matches = [];
@@ -281,6 +301,10 @@
     document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
     document.getElementById('btn-export-geojson').addEventListener('click', exportGeoJSON);
     document.getElementById('btn-reset-selection').addEventListener('click', resetSelection);
+    document.getElementById('ranking-reset').addEventListener('click', resetRanking);
+    document.querySelectorAll('.ranking-btn').forEach(btn => {
+      btn.addEventListener('click', () => applyRanking(btn.dataset.rankingKey));
+    });
 
     document.getElementById('mode-single').addEventListener('click', () => setSelectionMode('single'));
     document.getElementById('mode-box').addEventListener('click', () => setSelectionMode('box'));
@@ -544,6 +568,8 @@
         const osmData = await fetchOverpassData(query);
         
         allFeatures = [];
+        activeRankingKey = null;
+        updateRankingUI();
         (osmData.elements || []).forEach((el) => {
           if (el.type === 'way' && Array.isArray(el.geometry)) {
             const osmTags = el.tags || {};
@@ -657,6 +683,8 @@
       document.getElementById('single-detail-box').classList.add('hidden');
       document.getElementById('btn-reset-selection').classList.add('hidden');
       currentFilteredFeatures = [...allFeatures];
+      activeRankingKey = null;
+      updateRankingUI();
       updateSummary(currentFilteredFeatures, "全体集計サマリー");
       renderTable(currentFilteredFeatures);
     }
@@ -676,16 +704,53 @@
       document.getElementById('stat-generation').innerText = `${Math.round(totalAnnualKWh).toLocaleString()} kWh`;
     }
 
+    function updateRankingUI() {
+      const rankingStatus = document.getElementById('ranking-status');
+      rankingStatus.innerText = activeRankingKey ? RANKING_OPTIONS[activeRankingKey].label : '通常表示';
+      document.querySelectorAll('.ranking-btn').forEach(btn => {
+        const isActive = btn.dataset.rankingKey === activeRankingKey;
+        btn.className = isActive
+          ? 'ranking-btn px-2 py-1 rounded bg-blue-600 border border-blue-600 text-white font-semibold'
+          : 'ranking-btn px-2 py-1 rounded bg-white border border-slate-300 hover:bg-blue-50';
+      });
+    }
+
+    function applyRanking(key) {
+      if (!RANKING_OPTIONS[key] || currentFilteredFeatures.length === 0) return;
+      activeRankingKey = key;
+      sortAsc = false;
+      currentFilteredFeatures.sort((a, b) => (b.properties[key] || 0) - (a.properties[key] || 0));
+      updateRankingUI();
+      updateSummary(currentFilteredFeatures, `${RANKING_OPTIONS[key].label}`);
+      renderTable(currentFilteredFeatures);
+      const top = currentFilteredFeatures[0]?.properties;
+      if (top) {
+        showStatus(`🏆 ${RANKING_OPTIONS[key].label}: 1位は ${top.id} (${top[key].toLocaleString()} ${RANKING_OPTIONS[key].unit})`, 'bg-blue-100 text-blue-800');
+      }
+    }
+
+    function resetRanking() {
+      if (currentFilteredFeatures.length === 0) return;
+      activeRankingKey = null;
+      currentFilteredFeatures.sort((a, b) => String(a.properties.id).localeCompare(String(b.properties.id)));
+      updateRankingUI();
+      updateSummary(currentFilteredFeatures, "全体集計サマリー");
+      renderTable(currentFilteredFeatures);
+    }
+
     function renderTable(features) {
       const tbody = document.getElementById('table-body');
       tbody.innerHTML = '';
-      document.getElementById('table-status').innerText = `全 ${features.length} 件`;
+      const statusSuffix = activeRankingKey ? ` / ${RANKING_OPTIONS[activeRankingKey].label}` : '';
+      document.getElementById('table-status').innerText = `全 ${features.length} 件${statusSuffix}`;
 
-      features.forEach(f => {
+      features.forEach((f, index) => {
         const p = f.properties;
         const tr = document.createElement('tr');
-        tr.className = 'hover:bg-blue-50 cursor-pointer transition';
+        tr.className = `hover:bg-blue-50 cursor-pointer transition ${activeRankingKey && index < 3 ? 'bg-amber-50' : ''}`;
+        const rankLabel = activeRankingKey ? (index === 0 ? '🥇 1' : index === 1 ? '🥈 2' : index === 2 ? '🥉 3' : String(index + 1)) : '--';
         tr.innerHTML = `
+          <td class="p-2 border-r font-bold text-slate-700">${rankLabel}</td>
           <td class="p-2 border-r font-mono text-[11px]">${escapeHtml(p.id)}</td>
           <td class="p-2 border-r font-semibold">${p.calc_area_m2.toLocaleString()}</td>
           <td class="p-2 border-r text-emerald-700 font-semibold">${p.calc_capacity_kw.toLocaleString()}</td>
@@ -705,10 +770,12 @@
 
     function exportCSV() {
       if (currentFilteredFeatures.length === 0) return;
-      let csv = '\uFEFFID,面積(m2),推計容量(kW),年間発電量(kWh),ピーク出力(kW),一致タグ,OSMタグ\n';
-      currentFilteredFeatures.forEach(f => {
+      let csv = '\uFEFF順位,ランキング基準,ID,面積(m2),推計容量(kW),年間発電量(kWh),ピーク出力(kW),一致タグ,OSMタグ\n';
+      currentFilteredFeatures.forEach((f, index) => {
         const p = f.properties;
-        csv += `"${p.id}",${p.calc_area_m2},${p.calc_capacity_kw},${p.calc_annual_kwh},${p.calc_peak_kw},"${String(p.matched_query_tags || '').replace(/"/g, '""')}","${String(p.osm_tags || '').replace(/"/g, '""')}"\n`;
+        const rank = activeRankingKey ? index + 1 : '';
+        const rankingLabel = activeRankingKey ? RANKING_OPTIONS[activeRankingKey].label : '';
+        csv += `${rank},"${rankingLabel}","${p.id}",${p.calc_area_m2},${p.calc_capacity_kw},${p.calc_annual_kwh},${p.calc_peak_kw},"${String(p.matched_query_tags || '').replace(/"/g, '""')}","${String(p.osm_tags || '').replace(/"/g, '""')}"\n`;
       });
       downloadFile(csv, 'solar_analysis_export.csv', 'text/csv;charset=utf-8;');
     }
@@ -742,9 +809,10 @@
       });
     }
 
-    let sortAsc = false;
     function sortTable(colIndex) {
       sortAsc = !sortAsc;
+      activeRankingKey = null;
+      updateRankingUI();
       const keys = ['id', 'calc_area_m2', 'calc_capacity_kw', 'calc_annual_kwh', 'calc_peak_kw', 'matched_query_tags'];
       const key = keys[colIndex];
 
