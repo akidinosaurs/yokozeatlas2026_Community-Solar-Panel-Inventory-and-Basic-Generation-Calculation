@@ -111,6 +111,8 @@
             <div class="text-gray-500">個別面積:</div><div id="detail-area" class="font-semibold">-- m²</div>
             <div class="text-gray-500">個別容量:</div><div id="detail-capacity" class="font-semibold text-emerald-700">-- kW</div>
             <div class="text-gray-500">想定発電量:</div><div id="detail-gen" class="font-semibold text-amber-700">-- kWh</div>
+            <div class="text-gray-500">一致タグ:</div><div id="detail-tag-match" class="font-mono text-gray-800 break-all">--</div>
+            <div class="text-gray-500">OSMタグ:</div><div id="detail-tags" class="font-mono text-gray-700 break-all">--</div>
           </div>
         </div>
 
@@ -176,7 +178,9 @@
                 <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(1)">面積 (m²) ↕</th>
                 <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(2)">推計容量 (kW) ↕</th>
                 <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(3)">年間想定発電量 (kWh) ↕</th>
-                <th class="p-2 cursor-pointer hover:bg-slate-200" onclick="sortTable(4)">ピーク出力 (kW) ↕</th>
+                <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(4)">ピーク出力 (kW) ↕</th>
+                <th class="p-2 border-r cursor-pointer hover:bg-slate-200 min-w-[180px]" onclick="sortTable(5)">一致タグ ↕</th>
+                <th class="p-2 min-w-[260px]">OSMタグ</th>
               </tr>
             </thead>
             <tbody id="table-body" class="divide-y divide-gray-100"></tbody>
@@ -239,6 +243,39 @@
     let drawPoints = [];
     let currentMousePos = null;
     let selectedUserPolygon = null;
+
+    function getMatchingSolarQueryTags(tags = {}) {
+      const matches = [];
+      if (tags.power === 'generator' && tags['generator:source'] === 'solar') {
+        matches.push('power=generator + generator:source=solar');
+      }
+      if (tags.power === 'plant' && tags['plant:source'] === 'solar') {
+        matches.push('power=plant + plant:source=solar');
+      }
+      if (tags.building === 'solar_panels') {
+        matches.push('building=solar_panels');
+      }
+      if (tags.landuse === 'solar_panel') {
+        matches.push('landuse=solar_panel');
+      }
+      return matches;
+    }
+
+    function formatOsmTags(tags = {}) {
+      return Object.entries(tags)
+        .sort(([keyA], [keyB]) => keyA.localeCompare(keyB))
+        .map(([key, value]) => `${key}=${value}`)
+        .join('; ');
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     document.getElementById('btn-fetch').addEventListener('click', fetchDataAndAnalyze);
     document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
@@ -509,6 +546,9 @@
         allFeatures = [];
         (osmData.elements || []).forEach((el) => {
           if (el.type === 'way' && Array.isArray(el.geometry)) {
+            const osmTags = el.tags || {};
+            const matchedQueryTags = getMatchingSolarQueryTags(osmTags);
+            const osmTagsText = formatOsmTags(osmTags);
             const coordinates = el.geometry.map(pt => [pt.lon, pt.lat]);
             if (coordinates.length >= 3) {
               if (coordinates[0][0] !== coordinates[coordinates.length-1][0] || coordinates[0][1] !== coordinates[coordinates.length-1][1]) {
@@ -526,7 +566,9 @@
                 calc_area_m2: Math.round(areaM2 * 100) / 100,
                 calc_capacity_kw: Math.round(capacityKW * 100) / 100,
                 calc_annual_kwh: Math.round(annualKWh * 100) / 100,
-                calc_peak_kw: Math.round(peakKW * 100) / 100
+                calc_peak_kw: Math.round(peakKW * 100) / 100,
+                matched_query_tags: matchedQueryTags.join(' / ') || '検索条件タグ不明',
+                osm_tags: osmTagsText || 'タグなし'
               };
               allFeatures.push(poly);
             }
@@ -587,10 +629,11 @@
         .setLngLat(lngLat)
         .setHTML(`
           <div class="text-xs p-1 space-y-1">
-            <div class="font-bold text-blue-700">${p.id}</div>
+            <div class="font-bold text-blue-700">${escapeHtml(p.id)}</div>
             <div>個別面積: <b>${p.calc_area_m2.toLocaleString()} m²</b></div>
             <div>推計容量: <b>${p.calc_capacity_kw.toLocaleString()} kW</b></div>
             <div>想定発電: <b>${p.calc_annual_kwh.toLocaleString()} kWh</b></div>
+            <div>一致タグ: <span class="font-mono">${escapeHtml(p.matched_query_tags || '--')}</span></div>
           </div>
         `)
         .addTo(map);
@@ -599,6 +642,8 @@
       document.getElementById('detail-area').innerText = `${p.calc_area_m2.toLocaleString()} m²`;
       document.getElementById('detail-capacity').innerText = `${p.calc_capacity_kw.toLocaleString()} kW`;
       document.getElementById('detail-gen').innerText = `${p.calc_annual_kwh.toLocaleString()} kWh`;
+      document.getElementById('detail-tag-match').innerText = p.matched_query_tags || '--';
+      document.getElementById('detail-tags').innerText = p.osm_tags || '--';
       document.getElementById('single-detail-box').classList.remove('hidden');
 
       updateSummary([feature], "選択パネルの計算結果");
@@ -641,11 +686,13 @@
         const tr = document.createElement('tr');
         tr.className = 'hover:bg-blue-50 cursor-pointer transition';
         tr.innerHTML = `
-          <td class="p-2 border-r font-mono text-[11px]">${p.id}</td>
+          <td class="p-2 border-r font-mono text-[11px]">${escapeHtml(p.id)}</td>
           <td class="p-2 border-r font-semibold">${p.calc_area_m2.toLocaleString()}</td>
           <td class="p-2 border-r text-emerald-700 font-semibold">${p.calc_capacity_kw.toLocaleString()}</td>
           <td class="p-2 border-r text-amber-700">${p.calc_annual_kwh.toLocaleString()}</td>
-          <td class="p-2">${p.calc_peak_kw.toLocaleString()}</td>
+          <td class="p-2 border-r">${p.calc_peak_kw.toLocaleString()}</td>
+          <td class="p-2 border-r font-mono text-[11px] text-blue-700">${escapeHtml(p.matched_query_tags || '--')}</td>
+          <td class="p-2 font-mono text-[11px] text-gray-600">${escapeHtml(p.osm_tags || '--')}</td>
         `;
         tr.onclick = () => {
           const center = turf.centerOfMass(f).geometry.coordinates;
@@ -658,10 +705,10 @@
 
     function exportCSV() {
       if (currentFilteredFeatures.length === 0) return;
-      let csv = '\uFEFFID,面積(m2),推計容量(kW),年間発電量(kWh),ピーク出力(kW)\n';
+      let csv = '\uFEFFID,面積(m2),推計容量(kW),年間発電量(kWh),ピーク出力(kW),一致タグ,OSMタグ\n';
       currentFilteredFeatures.forEach(f => {
         const p = f.properties;
-        csv += `"${p.id}",${p.calc_area_m2},${p.calc_capacity_kw},${p.calc_annual_kwh},${p.calc_peak_kw}\n`;
+        csv += `"${p.id}",${p.calc_area_m2},${p.calc_capacity_kw},${p.calc_annual_kwh},${p.calc_peak_kw},"${String(p.matched_query_tags || '').replace(/"/g, '""')}","${String(p.osm_tags || '').replace(/"/g, '""')}"\n`;
       });
       downloadFile(csv, 'solar_analysis_export.csv', 'text/csv;charset=utf-8;');
     }
@@ -698,7 +745,7 @@
     let sortAsc = false;
     function sortTable(colIndex) {
       sortAsc = !sortAsc;
-      const keys = ['id', 'calc_area_m2', 'calc_capacity_kw', 'calc_annual_kwh', 'calc_peak_kw'];
+      const keys = ['id', 'calc_area_m2', 'calc_capacity_kw', 'calc_annual_kwh', 'calc_peak_kw', 'matched_query_tags'];
       const key = keys[colIndex];
 
       currentFilteredFeatures.sort((a, b) => {
