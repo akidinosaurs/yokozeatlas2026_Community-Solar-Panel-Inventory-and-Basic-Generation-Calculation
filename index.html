@@ -18,6 +18,21 @@
   <style>
     .no-select { user-select: none; -webkit-user-select: none; }
     .cursor-crosshair { cursor: crosshair !important; }
+    .oam-tile-pane {
+      position: absolute;
+      inset: 0;
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .oam-tile-pane img {
+      position: absolute;
+      width: 256px;
+      height: 256px;
+      max-width: none;
+      user-select: none;
+      -webkit-user-drag: none;
+    }
   </style>
 </head>
 <body class="bg-gray-100 h-screen w-screen flex flex-col font-sans overflow-hidden">
@@ -27,7 +42,7 @@
     <h1 class="text-lg font-bold flex items-center gap-2">
       <span>☀️</span> ソーラーパネル解析・可視化Webツール
     </h1>
-    <span class="text-xs text-gray-400">埼玉県横瀬町周辺 / 衛星画像・地形図 & QGIS多角形選択</span>
+    <span class="text-xs text-gray-400">埼玉県横瀬町周辺 / OAM高解像度空撮 & QGIS多角形選択</span>
   </header>
 
   <!-- メインコンテンツ領域 -->
@@ -115,7 +130,7 @@
       </div>
 
       <footer class="p-2.5 bg-slate-100 text-[10px] text-gray-500 border-t">
-        Map data © OpenStreetMap contributors | Tiles © Esri, 国土地理院, CARTO
+        Map data © OpenStreetMap contributors | Tiles © OpenAerialMap, Esri, 国土地理院, CARTO
       </footer>
     </aside>
 
@@ -127,8 +142,11 @@
       <div class="absolute top-3 right-3 z-20 bg-white/95 backdrop-blur border border-slate-300 p-3 rounded-lg shadow-lg text-xs space-y-2 w-64">
         <div class="font-bold text-slate-800 border-b pb-1">🗺️ 背景地図を選択</div>
         <div class="space-y-1.5 text-[11px]">
+          <label class="flex items-center gap-1.5 cursor-pointer font-semibold text-blue-700">
+            <input type="radio" name="bm" value="oam" checked> 🛸 OpenAerialMap (空撮画像)
+          </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
-            <input type="radio" name="bm" value="esri" checked> 🛰️ Esri World Imagery (広域衛星)
+            <input type="radio" name="bm" value="esri"> 🛰️ Esri World Imagery (広域衛星)
           </label>
           <label class="flex items-center gap-1.5 cursor-pointer">
             <input type="radio" name="bm" value="gsi_hillshade"> 🏔️ 国土地理院 陰影起伏図 (地形)
@@ -164,7 +182,10 @@
   </div>
 
   <script>
+    const EMPTY_STYLE = { version: 8, sources: {}, layers: [] };
+    const OAM_TILE_TEMPLATE = 'https://tiles.openaerialmap.org/62aeecdea896280006b0a6d6/0/62aeecdea896280006b0a6d7/{z}/{x}/{y}';
     const BASEMAPS = {
+      oam: { style: EMPTY_STYLE },
       esri: {
         style: {
           version: 8,
@@ -190,7 +211,7 @@
 
     const map = new maplibregl.Map({
       container: 'map',
-      style: BASEMAPS.esri.style,
+      style: BASEMAPS.oam.style,
       center: [139.0828, 35.9847],
       zoom: 14,
       doubleClickZoom: false
@@ -198,10 +219,16 @@
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
+    const oamTilePane = document.createElement('div');
+    oamTilePane.className = 'oam-tile-pane';
+    map.getContainer().insertBefore(oamTilePane, map.getCanvasContainer());
+
     let allFeatures = [];
     let currentFilteredFeatures = [];
     let activeMode = 'single';
     let popup = null;
+    let activeBasemap = 'oam';
+    let oamFrame = null;
 
     let drawPoints = [];
     let currentMousePos = null;
@@ -218,13 +245,109 @@
     // ベースマップ切り替え
     document.querySelectorAll('input[name="bm"]').forEach(radio => {
       radio.addEventListener('change', (e) => {
-        map.setStyle(BASEMAPS[e.target.value].style);
+        setBasemap(e.target.value);
+      });
+    });
+
+    map.on('load', () => {
+      setBasemap(activeBasemap);
+      renderGeoJSONOnMap();
+      renderDrawLayer();
+    });
+    map.on('move', scheduleOamTiles);
+    map.on('zoom', scheduleOamTiles);
+    map.on('resize', scheduleOamTiles);
+
+    function setBasemap(key) {
+      activeBasemap = key;
+      oamTilePane.style.display = key === 'oam' ? 'block' : 'none';
+      if (key === 'oam') {
+        map.setStyle(EMPTY_STYLE);
+        map.once('styledata', () => {
+          renderGeoJSONOnMap();
+          renderDrawLayer();
+          renderOamTiles();
+        });
+      } else {
+        map.setStyle(BASEMAPS[key].style);
         map.once('styledata', () => { 
           renderGeoJSONOnMap(); 
           renderDrawLayer(); 
         });
+      }
+    }
+
+    function scheduleOamTiles() {
+      if (activeBasemap !== 'oam') return;
+      if (oamFrame) cancelAnimationFrame(oamFrame);
+      oamFrame = requestAnimationFrame(renderOamTiles);
+    }
+
+    function renderOamTiles() {
+      oamFrame = null;
+      if (activeBasemap !== 'oam') return;
+
+      const bounds = map.getBounds();
+      const zoom = Math.max(0, Math.min(21, Math.floor(map.getZoom())));
+      const minTile = lngLatToTile(bounds.getWest(), bounds.getNorth(), zoom);
+      const maxTile = lngLatToTile(bounds.getEast(), bounds.getSouth(), zoom);
+      const existing = new Set();
+      const fragment = document.createDocumentFragment();
+
+      for (let x = minTile.x; x <= maxTile.x; x++) {
+        for (let y = minTile.y; y <= maxTile.y; y++) {
+          const id = zoom + '/' + x + '/' + y;
+          existing.add(id);
+          let img = oamTilePane.querySelector('[data-tile="' + id + '"]');
+          if (!img) {
+            img = document.createElement('img');
+            img.dataset.tile = id;
+            img.alt = '';
+            img.decoding = 'async';
+            img.loading = 'eager';
+            img.referrerPolicy = 'no-referrer';
+            img.src = OAM_TILE_TEMPLATE.replace('{z}', zoom).replace('{x}', x).replace('{y}', y);
+            fragment.appendChild(img);
+          }
+          positionTile(img, x, y, zoom);
+        }
+      }
+
+      oamTilePane.querySelectorAll('img[data-tile]').forEach(img => {
+        if (!existing.has(img.dataset.tile)) img.remove();
       });
-    });
+      oamTilePane.appendChild(fragment);
+    }
+
+    function lngLatToTile(lng, lat, zoom) {
+      const n = Math.pow(2, zoom);
+      const latRad = lat * Math.PI / 180;
+      const x = Math.floor((lng + 180) / 360 * n);
+      const y = Math.floor((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n);
+      return { x: clamp(x, 0, n - 1), y: clamp(y, 0, n - 1) };
+    }
+
+    function tileToLngLat(x, y, zoom) {
+      const n = Math.pow(2, zoom);
+      const lng = x / n * 360 - 180;
+      const latRad = Math.atan(Math.sinh(Math.PI * (1 - 2 * y / n)));
+      return { lng, lat: latRad * 180 / Math.PI };
+    }
+
+    function positionTile(img, x, y, zoom) {
+      const nw = tileToLngLat(x, y, zoom);
+      const se = tileToLngLat(x + 1, y + 1, zoom);
+      const topLeft = map.project([nw.lng, nw.lat]);
+      const bottomRight = map.project([se.lng, se.lat]);
+      img.style.left = topLeft.x + 'px';
+      img.style.top = topLeft.y + 'px';
+      img.style.width = Math.ceil(bottomRight.x - topLeft.x) + 'px';
+      img.style.height = Math.ceil(bottomRight.y - topLeft.y) + 'px';
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
 
     const mapCanvas = map.getCanvasContainer();
 
