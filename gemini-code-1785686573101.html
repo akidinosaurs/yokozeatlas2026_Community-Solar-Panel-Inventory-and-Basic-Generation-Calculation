@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ソーラーパネル解析・可視化Webツール</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- MapLibre GL JS -->
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet" />
+  
+  <!-- Turf.js (空間解析・面積計算) -->
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+  
+  <!-- osmtogeojson (OSM JSON -> GeoJSON 変換) -->
+  <script src="https://cdn.jsdelivr.net/npm/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+
+  <style>
+    .no-select {
+      user-select: none;
+      -webkit-user-select: none;
+    }
+  </style>
+</head>
+<body class="bg-gray-100 h-screen w-screen flex flex-col font-sans overflow-hidden">
+
+  <!-- メインヘッダー -->
+  <header class="bg-slate-800 text-white px-4 py-2 flex justify-between items-center z-10 shadow">
+    <h1 class="text-lg font-bold flex items-center gap-2">
+      <span>☀️</span> ソーラーパネル解析・可視化Webツール
+    </h1>
+    <span class="text-xs text-gray-400">埼玉県横瀬町周辺 / Overpass API リアルタイム抽出</span>
+  </header>
+
+  <!-- メインコンテンツ領域 -->
+  <div class="flex-1 flex overflow-hidden relative">
+
+    <!-- 左側：操作＆サマリーパネル -->
+    <aside class="w-80 bg-white border-r border-gray-200 flex flex-col z-10 shadow-lg flex-shrink-0">
+      <div class="p-4 flex-1 overflow-y-auto space-y-5">
+        
+        <div>
+          <button id="btn-fetch" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg shadow transition flex items-center justify-center gap-2">
+            <span>🔍</span> 画面内のデータを取得・解析
+          </button>
+          <p class="text-xs text-gray-500 mt-1">※表示中の地図範囲から最新のOSMデータを自動抽出します。</p>
+        </div>
+
+        <!-- ステータスメッセージ -->
+        <div id="status-message" class="hidden p-3 text-xs rounded-md"></div>
+
+        <!-- 集計サマリー -->
+        <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 space-y-3">
+          <h2 class="text-sm font-bold text-slate-700 border-b pb-1">📊 集計サマリー</h2>
+          <div class="grid grid-cols-2 gap-2 text-xs">
+            <div class="bg-white p-2 rounded border">
+              <div class="text-gray-500">検出数</div>
+              <div id="stat-count" class="text-base font-bold text-blue-600">0 件</div>
+            </div>
+            <div class="bg-white p-2 rounded border">
+              <div class="text-gray-500">総面積</div>
+              <div id="stat-area" class="text-base font-bold text-slate-800">0 m²</div>
+            </div>
+            <div class="bg-white p-2 rounded border">
+              <div class="text-gray-500">推定容量</div>
+              <div id="stat-capacity" class="text-base font-bold text-emerald-600">0 kW</div>
+            </div>
+            <div class="bg-white p-2 rounded border">
+              <div class="text-gray-500">年間発電量</div>
+              <div id="stat-generation" class="text-base font-bold text-amber-600">0 kWh</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 詳細パネル -->
+        <div id="detail-panel" class="hidden bg-white p-3 rounded-lg border border-blue-200 shadow-sm space-y-2 text-xs">
+          <div class="flex justify-between items-center border-b pb-1">
+            <h3 class="font-bold text-blue-800">📌 選択オブジェクト詳細</h3>
+            <button id="btn-close-detail" class="text-gray-400 hover:text-gray-600">✕</button>
+          </div>
+          <div id="detail-summary" class="space-y-1"></div>
+          <div>
+            <div class="font-semibold text-gray-700 mb-1">Raw Attributes (OSM Tags):</div>
+            <div class="max-h-40 overflow-y-auto border rounded bg-slate-50 p-1">
+              <table id="detail-tags-table" class="w-full text-left border-collapse">
+                <thead>
+                  <tr class="border-b text-gray-500"><th class="py-1">Key</th><th class="py-1">Value</th></tr>
+                </thead>
+                <tbody class="divide-y"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- データエクスポートボタン -->
+        <div class="space-y-2 pt-2 border-t">
+          <h2 class="text-xs font-bold text-gray-500 uppercase">データ出力</h2>
+          <div class="flex gap-2">
+            <button id="btn-export-csv" disabled class="flex-1 bg-gray-300 text-gray-500 font-bold py-2 px-2 text-xs rounded cursor-not-allowed transition">
+              📥 CSV保存
+            </button>
+            <button id="btn-export-geojson" disabled class="flex-1 bg-gray-300 text-gray-500 font-bold py-2 px-2 text-xs rounded cursor-not-allowed transition">
+              🗺️ GeoJSON保存
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <footer class="p-3 bg-slate-100 text-[10px] text-gray-500 border-t">
+        Map data © <a href="https://www.openstreetmap.org/copyright" target="_blank" class="underline">OpenStreetMap</a> contributors | 出典：国土地理院 (全国最新写真)
+      </footer>
+    </aside>
+
+    <!-- 右側：地図 ＋ スプレッドシート -->
+    <main class="flex-1 flex flex-col h-full relative overflow-hidden" id="right-container">
+      <div id="map" class="w-full flex-1 relative"></div>
+
+      <div id="resizer" class="hidden h-2 bg-slate-300 hover:bg-blue-500 cursor-row-resize z-20 flex items-center justify-center transition-colors">
+        <div class="w-8 h-1 bg-slate-500 rounded-full"></div>
+      </div>
+
+      <div id="table-container" class="hidden w-full bg-white border-t border-gray-300 flex flex-col overflow-hidden z-10" style="height: 30%;">
+        <div class="bg-slate-100 px-4 py-2 border-b flex justify-between items-center text-xs font-bold text-slate-700 flex-shrink-0">
+          <span>📋 抽出オブジェクト一覧</span>
+          <span id="table-status" class="text-gray-500 font-normal">全 0 件</span>
+        </div>
+        <div class="flex-1 overflow-auto">
+          <table id="data-table" class="w-full text-left text-xs border-collapse">
+            <thead class="bg-slate-50 sticky top-0 border-b z-10">
+              <tr>
+                <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(0)">ID ↕</th>
+                <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(1)">面積 (m²) ↕</th>
+                <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(2)">推計容量 (kW) ↕</th>
+                <th class="p-2 border-r cursor-pointer hover:bg-slate-200" onclick="sortTable(3)">年間想定発電量 (kWh) ↕</th>
+                <th class="p-2 cursor-pointer hover:bg-slate-200" onclick="sortTable(4)">ピーク出力 (kW) ↕</th>
+              </tr>
+            </thead>
+            <tbody id="table-body" class="divide-y"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </main>
+
+  </div>
+
+  <script>
+    const BASEMAPS = {
+      carto: {
+        name: "CARTO Positron (標準)",
+        style: {
+          version: 8,
+          sources: {
+            'carto-positron': {
+              type: 'raster',
+              tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
+              tileSize: 256,
+              attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>, © <a href="https://carto.com/attributions">CARTO</a>'
+            }
+          },
+          layers: [{ id: 'carto-layer', type: 'raster', source: 'carto-positron', minzoom: 0, maxzoom: 20 }]
+        }
+      },
+      osm: {
+        name: "OpenStreetMap Standard",
+        style: {
+          version: 8,
+          sources: {
+            'osm-tiles': {
+              type: 'raster',
+              tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+              tileSize: 256,
+              attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            }
+          },
+          layers: [{ id: 'osm-layer', type: 'raster', source: 'osm-tiles', minzoom: 0, maxzoom: 19 }]
+        }
+      },
+      gsi: {
+        name: "国土地理院 全国最新写真 (高精度 衛星・航空写真)",
+        style: {
+          version: 8,
+          sources: {
+            'gsi-tiles': {
+              type: 'raster',
+              tiles: ['https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg'],
+              tileSize: 256,
+              attribution: '出典：<a href="https://maps.gsi.go.jp/development/ichiran.html">国土地理院 (全国最新写真)</a>'
+            }
+          },
+          layers: [{ id: 'gsi-layer', type: 'raster', source: 'gsi-tiles', minzoom: 0, maxzoom: 18 }]
+        }
+      }
+    };
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      style: BASEMAPS.carto.style,
+      center: [139.0828, 35.9847],
+      zoom: 13.5
+    });
+
+    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+    class BasemapControl {
+      onAdd(map) {
+        this._map = map;
+        this._container = document.createElement('div');
+        this._container.className = 'maplibregl-ctrl maplibregl-ctrl-group bg-white p-2 text-xs shadow rounded space-y-1';
+        this._container.innerHTML = `
+          <div class="font-bold text-gray-600 mb-1">背景地図切替</div>
+          <label class="flex items-center gap-1 cursor-pointer"><input type="radio" name="bm" value="carto" checked> CARTO Positron</label>
+          <label class="flex items-center gap-1 cursor-pointer"><input type="radio" name="bm" value="osm"> OpenStreetMap</label>
+          <label class="flex items-center gap-1 cursor-pointer"><input type="radio" name="bm" value="gsi"> 国土地理院 航空写真</label>
+        `;
+        this._container.querySelectorAll('input').forEach(radio => {
+          radio.addEventListener('change', (e) => {
+            const key = e.target.value;
+            this._map.setStyle(BASEMAPS[key].style);
+            this._map.once('styledata', () => reattachGeoJsonLayer());
+          });
+        });
+        return this._container;
+      }
+      onRemove() { this._container.parentNode.removeChild(this._container); this._map = null; }
+    }
+    map.addControl(new BasemapControl(), 'top-right');
+
+    let currentGeoJSON = null;
+    let selectedFeatureId = null;
+    let popup = null;
+
+    document.getElementById('btn-fetch').addEventListener('click', fetchDataAndAnalyze);
+    document.getElementById('btn-close-detail').addEventListener('click', () => {
+      document.getElementById('detail-panel').classList.add('hidden');
+    });
+    document.getElementById('btn-export-csv').addEventListener('click', exportCSV);
+    document.getElementById('btn-export-geojson').addEventListener('click', exportGeoJSON);
+
+    // ブラウザのCORS・トラッキング遮断を回避するマルチエンドポイント＆GET/POST自動切り替え通信関数
+    const OVERPASS_ENDPOINTS = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://overpass.private.coffee/api/interpreter'
+    ];
+
+    async function fetchOverpassData(query) {
+      let lastErr = null;
+
+      for (const endpoint of OVERPASS_ENDPOINTS) {
+        // 1. まず標準のGETリクエストで試行（ブラウザのCORS制限を受けにくい）
+        try {
+          const getUrl = `${endpoint}?data=${encodeURIComponent(query)}`;
+          const response = await fetch(getUrl, { method: 'GET', mode: 'cors' });
+          if (response.ok) return await response.json();
+        } catch (err) {
+          console.warn(`GET通信失敗 (${endpoint}):`, err);
+          lastErr = err;
+        }
+
+        // 2. GETが失敗した場合はPOSTフォーム形式でフォールバック試行
+        try {
+          const response = await fetch(endpoint, {
+            method: 'POST',
+            mode: 'cors',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            body: 'data=' + encodeURIComponent(query)
+          });
+          if (response.ok) return await response.json();
+        } catch (err) {
+          console.warn(`POST通信失敗 (${endpoint}):`, err);
+          lastErr = err;
+        }
+      }
+
+      throw lastErr || new Error('通信がブロックされました。ブラウザの広告ブロック拡張機能（uBlock等）を無効にしてお試しください。');
+    }
+
+    async function fetchDataAndAnalyze() {
+      const zoom = map.getZoom();
+
+      if (zoom < 11) {
+        showStatus('⚠️ 地図の範囲が広すぎます。もう少し拡大（Zoom 11以上）してください。', 'bg-amber-100 text-amber-800');
+        return;
+      }
+
+      showStatus('⏳ 画面範囲のソーラーパネルデータを取得・解析中...', 'bg-blue-100 text-blue-800');
+
+      const bounds = map.getBounds();
+      const bbox = `${bounds.getSouth()},${bounds.getWest()},${bounds.getNorth()},${bounds.getEast()}`;
+
+      const query = `
+[out:json][timeout:25];
+(
+  way["power"="generator"]["generator:source"="solar"](${bbox});
+  way["power"="plant"]["plant:source"="solar"](${bbox});
+  relation["power"="plant"]["plant:source"="solar"](${bbox});
+  relation["power"="generator"]["generator:source"="solar"](${bbox});
+);
+out body;
+>;
+out skel qt;
+      `;
+
+      try {
+        const osmData = await fetchOverpassData(query);
+        const rawGeoJSON = osmtogeojson(osmData);
+
+        const processedFeatures = [];
+        rawGeoJSON.features.forEach((feat, idx) => {
+          if (feat.geometry.type === 'Polygon' || feat.geometry.type === 'MultiPolygon') {
+            const areaM2 = turf.area(feat);
+            const capacityKW = areaM2 * 0.18;
+            const annualKWh = capacityKW * 1050;
+            const peakKW = capacityKW * 0.75;
+
+            feat.id = feat.id || `solar-${idx + 1}`;
+            feat.properties = {
+              ...feat.properties,
+              calc_area_m2: Math.round(areaM2 * 100) / 100,
+              calc_capacity_kw: Math.round(capacityKW * 100) / 100,
+              calc_annual_kwh: Math.round(annualKWh * 100) / 100,
+              calc_peak_kw: Math.round(peakKW * 100) / 100
+            };
+            processedFeatures.push(feat);
+          }
+        });
+
+        currentGeoJSON = { type: 'FeatureCollection', features: processedFeatures };
+
+        if (processedFeatures.length === 0) {
+          showStatus('ℹ️ 画面内にソーラーパネル（Polygon）が見つかりませんでした。', 'bg-gray-100 text-gray-800');
+          clearResults();
+        } else {
+          showStatus(`✅ 取得完了: ${processedFeatures.length} 件のポリゴンを抽出しました。`, 'bg-emerald-100 text-emerald-800');
+          renderGeoJSONOnMap();
+          updateSummary(processedFeatures);
+          renderTable(processedFeatures);
+          enableExports();
+          showTableContainer();
+        }
+
+      } catch (err) {
+        showStatus(`❌ API通信エラー: 通信がブロックされました。ブラウザのコンテンツブロック機能等をOFFにして再試行してください。`, 'bg-red-100 text-red-800');
+      }
+    }
+
+    function renderGeoJSONOnMap() {
+      if (!currentGeoJSON) return;
+
+      if (map.getSource('solar-data')) {
+        map.getSource('solar-data').setData(currentGeoJSON);
+      } else {
+        map.addSource('solar-data', { type: 'geojson', data: currentGeoJSON });
+
+        map.addLayer({
+          id: 'solar-fill',
+          type: 'fill',
+          source: 'solar-data',
+          paint: {
+            'fill-color': '#3B82F6',
+            'fill-opacity': 0.5
+          }
+        });
+
+        map.addLayer({
+          id: 'solar-line',
+          type: 'line',
+          source: 'solar-data',
+          paint: {
+            'line-color': '#1D4ED8',
+            'line-width': 2
+          }
+        });
+
+        map.on('click', 'solar-fill', (e) => {
+          if (e.features && e.features.length > 0) {
+            selectFeature(e.features[0].id, e.lngLat);
+          }
+        });
+
+        map.on('mouseenter', 'solar-fill', () => map.getCanvas().style.cursor = 'pointer');
+        map.on('mouseleave', 'solar-fill', () => map.getCanvas().style.cursor = '');
+      }
+    }
+
+    function reattachGeoJsonLayer() {
+      if (currentGeoJSON && !map.getSource('solar-data')) {
+        renderGeoJSONOnMap();
+      }
+    }
+
+    function updateSummary(features) {
+      let totalArea = 0;
+      let totalCapacity = 0;
+      let totalAnnualKWh = 0;
+
+      features.forEach(f => {
+        totalArea += f.properties.calc_area_m2;
+        totalCapacity += f.properties.calc_capacity_kw;
+        totalAnnualKWh += f.properties.calc_annual_kwh;
+      });
+
+      document.getElementById('stat-count').innerText = `${features.length} 件`;
+      document.getElementById('stat-area').innerText = `${totalArea.toLocaleString()} m²`;
+      document.getElementById('stat-capacity').innerText = `${Math.round(totalCapacity).toLocaleString()} kW`;
+      document.getElementById('stat-generation').innerText = `${Math.round(totalAnnualKWh).toLocaleString()} kWh`;
+    }
+
+    function renderTable(features) {
+      const tbody = document.getElementById('table-body');
+      tbody.innerHTML = '';
+      document.getElementById('table-status').innerText = `全 ${features.length} 件`;
+
+      features.forEach(f => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-blue-50 cursor-pointer transition';
+        tr.id = `row-${f.id}`;
+        tr.onclick = () => {
+          const center = turf.centerOfMass(f).geometry.coordinates;
+          map.panTo(center);
+          selectFeature(f.id, { lng: center[0], lat: center[1] });
+        };
+
+        tr.innerHTML = `
+          <td class="p-2 border-r font-mono text-[11px]">${f.id}</td>
+          <td class="p-2 border-r font-semibold">${f.properties.calc_area_m2.toLocaleString()}</td>
+          <td class="p-2 border-r text-emerald-700 font-semibold">${f.properties.calc_capacity_kw.toLocaleString()}</td>
+          <td class="p-2 border-r text-amber-700">${f.properties.calc_annual_kwh.toLocaleString()}</td>
+          <td class="p-2">${f.properties.calc_peak_kw.toLocaleString()}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+
+    function selectFeature(featureId, lngLat) {
+      if (!currentGeoJSON) return;
+      const feat = currentGeoJSON.features.find(f => f.id === featureId);
+      if (!feat) return;
+
+      selectedFeatureId = featureId;
+
+      document.querySelectorAll('#table-body tr').forEach(r => r.classList.remove('bg-blue-100', 'font-bold'));
+      const row = document.getElementById(`row-${featureId}`);
+      if (row) {
+        row.classList.add('bg-blue-100', 'font-bold');
+        row.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+
+      if (popup) popup.remove();
+      popup = new maplibregl.Popup()
+        .setLngLat(lngLat)
+        .setHTML(`
+          <div class="text-xs p-1">
+            <div class="font-bold text-blue-700 mb-1">ID: ${feat.id}</div>
+            <div>面積: <b>${feat.properties.calc_area_m2.toLocaleString()} m²</b></div>
+            <div>推計容量: <b>${feat.properties.calc_capacity_kw.toLocaleString()} kW</b></div>
+          </div>
+        `)
+        .addTo(map);
+
+      const detailPanel = document.getElementById('detail-panel');
+      const detailSummary = document.getElementById('detail-summary');
+      const tagsTbody = document.querySelector('#detail-tags-table tbody');
+
+      const center = turf.centerOfMass(feat).geometry.coordinates;
+      detailSummary.innerHTML = `
+        <div><b>ID:</b> <span class="font-mono">${feat.id}</span></div>
+        <div><b>中心座標:</b> 緯度 ${center[1].toFixed(5)}, 経度 ${center[0].toFixed(5)}</div>
+        <div><b>面積:</b> ${feat.properties.calc_area_m2} m²</div>
+        <div><b>推計容量:</b> ${feat.properties.calc_capacity_kw} kW</div>
+      `;
+
+      tagsTbody.innerHTML = '';
+      Object.entries(feat.properties).forEach(([k, v]) => {
+        if (!k.startsWith('calc_')) {
+          const tr = document.createElement('tr');
+          tr.innerHTML = `<td class="py-0.5 font-semibold text-gray-600">${k}</td><td class="py-0.5 text-gray-800">${v}</td>`;
+          tagsTbody.appendChild(tr);
+        }
+      });
+
+      detailPanel.classList.remove('hidden');
+    }
+
+    const resizer = document.getElementById('resizer');
+    const tableContainer = document.getElementById('table-container');
+    const rightContainer = document.getElementById('right-container');
+    let isResizing = false;
+
+    function showTableContainer() {
+      resizer.classList.remove('hidden');
+      tableContainer.classList.remove('hidden');
+      map.resize();
+    }
+
+    resizer.addEventListener('mousedown', (e) => {
+      isResizing = true;
+      document.body.classList.add('no-select');
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      if (!isResizing) return;
+      const containerRect = rightContainer.getBoundingClientRect();
+      const newTableHeight = containerRect.bottom - e.clientY;
+      const heightPercent = (newTableHeight / containerRect.height) * 100;
+
+      if (heightPercent > 10 && heightPercent < 80) {
+        tableContainer.style.height = `${heightPercent}%`;
+        map.resize();
+      }
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (isResizing) {
+        isResizing = false;
+        document.body.classList.remove('no-select');
+        map.resize();
+      }
+    });
+
+    function exportCSV() {
+      if (!currentGeoJSON || currentGeoJSON.features.length === 0) return;
+
+      let csv = '\uFEFFID,面積(m2),推計容量(kW),年間発電量(kWh),ピーク出力(kW),中心緯度,中心経度\n';
+      currentGeoJSON.features.forEach(f => {
+        const c = turf.centerOfMass(f).geometry.coordinates;
+        p = f.properties;
+        csv += `"${f.id}",${p.calc_area_m2},${p.calc_capacity_kw},${p.calc_annual_kwh},${p.calc_peak_kw},${c[1]},${c[0]}\n`;
+      });
+
+      downloadFile(csv, 'solar_analysis_export.csv', 'text/csv;charset=utf-8;');
+    }
+
+    function exportGeoJSON() {
+      if (!currentGeoJSON) return;
+      const jsonStr = JSON.stringify(currentGeoJSON, null, 2);
+      downloadFile(jsonStr, 'solar_analysis_export.geojson', 'application/json');
+    }
+
+    function downloadFile(content, fileName, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function showStatus(msg, bgClass) {
+      const el = document.getElementById('status-message');
+      el.className = `p-3 text-xs rounded-md ${bgClass}`;
+      el.innerText = msg;
+      el.classList.remove('hidden');
+    }
+
+    function enableExports() {
+      const btnCsv = document.getElementById('btn-export-csv');
+      const btnGeo = document.getElementById('btn-export-geojson');
+      [btnCsv, btnGeo].forEach(btn => {
+        btn.disabled = false;
+        btn.classList.remove('bg-gray-300', 'text-gray-500', 'cursor-not-allowed');
+        btn.classList.add('bg-emerald-600', 'hover:bg-emerald-700', 'text-white', 'cursor-pointer');
+      });
+    }
+
+    function clearResults() {
+      if (map.getSource('solar-data')) {
+        map.getSource('solar-data').setData({ type: 'FeatureCollection', features: [] });
+      }
+      document.getElementById('table-body').innerHTML = '';
+      document.getElementById('stat-count').innerText = '0 件';
+      document.getElementById('stat-area').innerText = '0 m²';
+      document.getElementById('stat-capacity').innerText = '0 kW';
+      document.getElementById('stat-generation').innerText = '0 kWh';
+    }
+
+    let sortAsc = false;
+    function sortTable(colIndex) {
+      if (!currentGeoJSON) return;
+      sortAsc = !sortAsc;
+      const keys = ['id', 'calc_area_m2', 'calc_capacity_kw', 'calc_annual_kwh', 'calc_peak_kw'];
+      const key = keys[colIndex];
+
+      currentGeoJSON.features.sort((a, b) => {
+        const valA = colIndex === 0 ? a.id : a.properties[key];
+        const valB = colIndex === 0 ? b.id : b.properties[key];
+        return sortAsc ? (valA > valB ? 1 : -1) : (valA < valB ? 1 : -1);
+      });
+
+      renderTable(currentGeoJSON.features);
+    }
+  </script>
+</body>
+</html>
