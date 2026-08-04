@@ -6,6 +6,14 @@
 
 https://akidinosaurs.github.io/yokozeatlas2026_Community-Solar-Panel-Inventory-and-Basic-Generation-Calculation/
 
+## スマホOSM編集アプリ構想
+
+`mobile-osm-editor/` に、今回の台帳アプリをベースにしたスマホ向けOSM編集アプリのスターターを追加しています。
+
+このスターターでは、OSM本番APIへ直接反映する前段階として、太陽光設備の追加候補・削除候補をスマホ地図上で作成し、差分を下書きデータとしてエクスポートできます。
+
+OSMへの本番反映には、OSM OAuth認証、changeset作成、既存地物のversion確認、削除理由の明記が必要です。
+
 ## 主な機能
 
 - Overpass API から太陽光設備候補の OSM ポリゴンを取得

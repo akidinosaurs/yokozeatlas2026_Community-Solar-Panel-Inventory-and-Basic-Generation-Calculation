@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>横瀬町ソーラーパネル OSM編集スターター</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+  <link href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" rel="stylesheet">
+  <style>
+    html, body, #map { height: 100%; margin: 0; }
+    body { overscroll-behavior: none; }
+    .bottom-sheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 20;
+      padding: 12px;
+      padding-bottom: max(12px, env(safe-area-inset-bottom));
+      pointer-events: none;
+    }
+    .bottom-sheet > div { pointer-events: auto; }
+    .maplibregl-popup-content { border-radius: 12px; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-900">
+  <div id="map"></div>
+
+  <div class="fixed top-3 left-3 right-3 z-20 pointer-events-none">
+    <div class="bg-white/95 rounded-2xl shadow-lg border border-slate-200 p-3 pointer-events-auto">
+      <div class="flex items-start justify-between gap-2">
+        <div>
+          <h1 class="text-sm font-bold">横瀬町ソーラーパネル OSM編集スターター</h1>
+          <p id="status" class="text-[11px] text-slate-600 mt-1">既存データを読み込み中...</p>
+        </div>
+        <span id="mode-badge" class="text-[11px] font-bold bg-slate-900 text-white rounded-full px-2 py-1">確認</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-sheet">
+    <div class="bg-white rounded-3xl shadow-2xl border border-slate-200 p-3 space-y-3">
+      <div class="grid grid-cols-3 gap-2">
+        <button id="mode-inspect" class="mode-btn bg-slate-900 text-white rounded-2xl py-3 text-sm font-bold">確認</button>
+        <button id="mode-add" class="mode-btn bg-white border border-slate-300 rounded-2xl py-3 text-sm font-bold">追加</button>
+        <button id="mode-delete" class="mode-btn bg-white border border-slate-300 rounded-2xl py-3 text-sm font-bold">削除候補</button>
+      </div>
+
+      <div id="add-panel" class="hidden bg-blue-50 border border-blue-200 rounded-2xl p-3 space-y-2">
+        <div class="text-xs font-bold text-blue-900">追加モード</div>
+        <label class="block text-xs text-slate-700">
+          推定面積 m²
+          <input id="area-input" type="number" value="30" min="1" class="mt-1 w-full border border-slate-300 rounded-xl px-3 py-2 text-base">
+        </label>
+        <p class="text-[11px] text-slate-600">地図をタップすると、指定面積の正方形ポリゴンを下書き作成します。</p>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2 text-center">
+        <div class="bg-slate-100 rounded-2xl p-2">
+          <div id="existing-count" class="text-lg font-bold">0</div>
+          <div class="text-[10px] text-slate-500">既存</div>
+        </div>
+        <div class="bg-blue-100 rounded-2xl p-2">
+          <div id="add-count" class="text-lg font-bold text-blue-700">0</div>
+          <div class="text-[10px] text-slate-500">追加下書き</div>
+        </div>
+        <div class="bg-red-100 rounded-2xl p-2">
+          <div id="delete-count" class="text-lg font-bold text-red-700">0</div>
+          <div class="text-[10px] text-slate-500">削除候補</div>
+        </div>
+      </div>
+
+      <div class="grid grid-cols-3 gap-2">
+        <button id="undo" class="bg-slate-200 rounded-2xl py-3 text-xs font-bold">1つ戻す</button>
+        <button id="export-draft" class="bg-emerald-600 text-white rounded-2xl py-3 text-xs font-bold">下書き保存</button>
+        <button id="upload-osm" disabled class="bg-slate-300 text-slate-500 rounded-2xl py-3 text-xs font-bold">OSM反映</button>
+      </div>
+
+      <p class="text-[10px] text-slate-500 leading-relaxed">
+        安全のため、OSM本番APIへの直接反映は未有効化です。まず下書き差分を保存し、OAuth設定後に反映機能を有効化します。
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const DATA_URL = '../data/yokoze_solar_panels.geojson';
+    const OSM_UPLOAD_ENABLED = false;
+
+    const map = new maplibregl.Map({
+      container: 'map',
+      center: [139.0828, 35.9847],
+      zoom: 14,
+      style: {
+        version: 8,
+        sources: {
+          carto: {
+            type: 'raster',
+            tiles: ['https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors, © CARTO'
+          }
+        },
+        layers: [{ id: 'carto-layer', type: 'raster', source: 'carto' }]
+      }
+    });
+
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
+
+    let mode = 'inspect';
+    let existingFeatures = [];
+    let addDrafts = [];
+    let deleteDrafts = [];
+    let actionStack = [];
+    let popup = null;
+
+    const statusEl = document.getElementById('status');
+    const modeBadge = document.getElementById('mode-badge');
+
+    function setStatus(message) {
+      statusEl.textContent = message;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    function closeRing(coords) {
+      if (coords.length && (coords[0][0] !== coords[coords.length - 1][0] || coords[0][1] !== coords[coords.length - 1][1])) {
+        return [...coords, coords[0]];
+      }
+      return coords;
+    }
+
+    function squareAround(lng, lat, areaM2) {
+      const side = Math.sqrt(Math.max(areaM2, 1));
+      const latDelta = side / 111320 / 2;
+      const lngDelta = side / (111320 * Math.cos(lat * Math.PI / 180)) / 2;
+      return closeRing([
+        [lng - lngDelta, lat - latDelta],
+        [lng + lngDelta, lat - latDelta],
+        [lng + lngDelta, lat + latDelta],
+        [lng - lngDelta, lat + latDelta]
+      ]);
+    }
+
+    function featureCollection(features) {
+      return { type: 'FeatureCollection', features };
+    }
+
+    function refreshSources() {
+      const visibleExisting = existingFeatures.filter(f => !deleteDrafts.some(d => d.properties.id === f.properties.id));
+      map.getSource('existing-solar')?.setData(featureCollection(visibleExisting));
+      map.getSource('add-drafts')?.setData(featureCollection(addDrafts));
+      map.getSource('delete-drafts')?.setData(featureCollection(deleteDrafts));
+
+      document.getElementById('existing-count').textContent = visibleExisting.length;
+      document.getElementById('add-count').textContent = addDrafts.length;
+      document.getElementById('delete-count').textContent = deleteDrafts.length;
+    }
+
+    function setMode(nextMode) {
+      mode = nextMode;
+      modeBadge.textContent = mode === 'inspect' ? '確認' : mode === 'add' ? '追加' : '削除候補';
+      document.getElementById('add-panel').classList.toggle('hidden', mode !== 'add');
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        const active = btn.id === `mode-${mode}`;
+        btn.className = active
+          ? 'mode-btn bg-slate-900 text-white rounded-2xl py-3 text-sm font-bold'
+          : 'mode-btn bg-white border border-slate-300 rounded-2xl py-3 text-sm font-bold';
+      });
+      setStatus(mode === 'add'
+        ? '追加モード: 地図をタップして追加候補を作成'
+        : mode === 'delete'
+          ? '削除候補モード: 既存ポリゴンをタップして削除候補へ'
+          : '確認モード: ポリゴンをタップして属性を確認');
+    }
+
+    function addDraftAt(lngLat) {
+      const areaM2 = Number(document.getElementById('area-input').value || 30);
+      const id = `draft/new-solar-${Date.now()}`;
+      const coords = squareAround(lngLat.lng, lngLat.lat, areaM2);
+      const capacityKW = Math.round(areaM2 * 0.18 * 100) / 100;
+      const feature = {
+        type: 'Feature',
+        id,
+        geometry: { type: 'Polygon', coordinates: [coords] },
+        properties: {
+          id,
+          change_type: 'create',
+          osm_type: 'way',
+          source_dataset: 'mobile field survey draft',
+          calc_area_m2: areaM2,
+          calc_capacity_kw: capacityKW,
+          tags: {
+            power: 'generator',
+            'generator:source': 'solar',
+            'generator:method': 'photovoltaic',
+            source: 'survey',
+            fixme: 'Review geometry and upload with OSM OAuth'
+          }
+        }
+      };
+      addDrafts.push(feature);
+      actionStack.push({ type: 'add', id });
+      refreshSources();
+      setStatus(`追加下書きを作成: ${id}`);
+    }
+
+    function markDelete(feature) {
+      const id = feature.properties.id;
+      if (deleteDrafts.some(d => d.properties.id === id)) {
+        setStatus(`すでに削除候補です: ${id}`);
+        return;
+      }
+      const draft = JSON.parse(JSON.stringify(feature));
+      draft.properties.change_type = 'delete';
+      draft.properties.delete_reason = 'field survey review required';
+      draft.properties.note = 'OSM upload requires latest element version before deletion.';
+      deleteDrafts.push(draft);
+      actionStack.push({ type: 'delete', id });
+      refreshSources();
+      setStatus(`削除候補に追加: ${id}`);
+    }
+
+    function undoLast() {
+      const last = actionStack.pop();
+      if (!last) return;
+      if (last.type === 'add') addDrafts = addDrafts.filter(f => f.id !== last.id);
+      if (last.type === 'delete') deleteDrafts = deleteDrafts.filter(f => f.properties.id !== last.id);
+      refreshSources();
+      setStatus('直前の操作を取り消しました');
+    }
+
+    function showFeaturePopup(feature, lngLat) {
+      if (popup) popup.remove();
+      popup = new maplibregl.Popup()
+        .setLngLat(lngLat)
+        .setHTML(`
+          <div class="text-xs space-y-1">
+            <div class="font-bold text-blue-700">${escapeHtml(feature.properties.id)}</div>
+            <div>面積: ${Number(feature.properties.calc_area_m2 || 0).toLocaleString()} m²</div>
+            <div>容量: ${Number(feature.properties.calc_capacity_kw || 0).toLocaleString()} kW</div>
+            <div class="text-slate-500">${escapeHtml(feature.properties.osm_tags || feature.properties.change_type || '')}</div>
+          </div>
+        `)
+        .addTo(map);
+    }
+
+    function downloadFile(content, fileName, mimeType) {
+      const blob = new Blob([content], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function toOsmChangeForAdditions(features) {
+      let nextNodeId = -1;
+      let nextWayId = -1;
+      const nodes = [];
+      const ways = [];
+
+      features.forEach(feature => {
+        const nodeIds = [];
+        const ring = feature.geometry.coordinates[0].slice(0, -1);
+        ring.forEach(([lon, lat]) => {
+          const nodeId = nextNodeId--;
+          nodeIds.push(nodeId);
+          nodes.push(`    <node id="${nodeId}" lon="${lon}" lat="${lat}" />`);
+        });
+        const wayId = nextWayId--;
+        const nds = [...nodeIds, nodeIds[0]].map(id => `      <nd ref="${id}" />`).join('\n');
+        const tags = Object.entries(feature.properties.tags || {})
+          .map(([k, v]) => `      <tag k="${escapeHtml(k)}" v="${escapeHtml(v)}" />`)
+          .join('\n');
+        ways.push(`    <way id="${wayId}">\n${nds}\n${tags}\n    </way>`);
+      });
+
+      return `<?xml version="1.0" encoding="UTF-8"?>\n<osmChange version="0.6" generator="yokoze-solar-mobile-editor-starter">\n  <create>\n${nodes.join('\n')}\n${ways.join('\n')}\n  </create>\n</osmChange>\n`;
+    }
+
+    function exportDrafts() {
+      const draftGeojson = {
+        type: 'FeatureCollection',
+        metadata: {
+          generated_at: new Date().toISOString(),
+          upload_enabled: OSM_UPLOAD_ENABLED,
+          note: 'Review before uploading to OSM. Deletions require latest OSM element version.'
+        },
+        features: [...addDrafts, ...deleteDrafts]
+      };
+      downloadFile(JSON.stringify(draftGeojson, null, 2), 'yokoze-solar-osm-draft.geojson', 'application/geo+json');
+      if (addDrafts.length) {
+        downloadFile(toOsmChangeForAdditions(addDrafts), 'yokoze-solar-osm-additions.osc', 'application/xml');
+      }
+      if (deleteDrafts.length) {
+        downloadFile(JSON.stringify(deleteDrafts.map(f => f.properties), null, 2), 'yokoze-solar-osm-deletions-review.json', 'application/json');
+      }
+      setStatus('下書き差分を保存しました');
+    }
+
+    map.on('load', async () => {
+      map.addSource('existing-solar', { type: 'geojson', data: featureCollection([]) });
+      map.addLayer({
+        id: 'existing-fill',
+        type: 'fill',
+        source: 'existing-solar',
+        paint: { 'fill-color': '#00bcd4', 'fill-opacity': 0.55 }
+      });
+      map.addLayer({
+        id: 'existing-line',
+        type: 'line',
+        source: 'existing-solar',
+        paint: { 'line-color': '#0088aa', 'line-width': 2 }
+      });
+
+      map.addSource('add-drafts', { type: 'geojson', data: featureCollection([]) });
+      map.addLayer({
+        id: 'add-draft-fill',
+        type: 'fill',
+        source: 'add-drafts',
+        paint: { 'fill-color': '#2563eb', 'fill-opacity': 0.45 }
+      });
+      map.addLayer({
+        id: 'add-draft-line',
+        type: 'line',
+        source: 'add-drafts',
+        paint: { 'line-color': '#1d4ed8', 'line-width': 3, 'line-dasharray': [2, 1] }
+      });
+
+      map.addSource('delete-drafts', { type: 'geojson', data: featureCollection([]) });
+      map.addLayer({
+        id: 'delete-draft-line',
+        type: 'line',
+        source: 'delete-drafts',
+        paint: { 'line-color': '#dc2626', 'line-width': 4, 'line-dasharray': [1, 1] }
+      });
+
+      const response = await fetch(DATA_URL);
+      const geojson = await response.json();
+      existingFeatures = geojson.features || [];
+      refreshSources();
+      setStatus(`既存データ ${existingFeatures.length} 件を読み込みました`);
+    });
+
+    map.on('click', (e) => {
+      if (mode === 'add') {
+        addDraftAt(e.lngLat);
+        return;
+      }
+
+      const rendered = map.queryRenderedFeatures(e.point, {
+        layers: ['existing-fill', 'add-draft-fill']
+      });
+      if (!rendered.length) return;
+
+      const feature = rendered[0];
+      if (mode === 'delete' && feature.layer.id === 'existing-fill') {
+        markDelete(feature);
+      } else {
+        showFeaturePopup(feature, e.lngLat);
+      }
+    });
+
+    document.getElementById('mode-inspect').addEventListener('click', () => setMode('inspect'));
+    document.getElementById('mode-add').addEventListener('click', () => setMode('add'));
+    document.getElementById('mode-delete').addEventListener('click', () => setMode('delete'));
+    document.getElementById('undo').addEventListener('click', undoLast);
+    document.getElementById('export-draft').addEventListener('click', exportDrafts);
+    document.getElementById('upload-osm').addEventListener('click', () => {
+      setStatus('OSM反映はOAuth設定後に有効化します');
+    });
+
+    setMode('inspect');
+  </script>
+</body>
+</html>
